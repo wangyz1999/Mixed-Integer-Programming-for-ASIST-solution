@@ -290,10 +290,13 @@ def mip_solve(data):
     return solution
 
 if __name__ == "__main__":
-    with open('data\\json\\Falcon_v1.0_Medium_sm_clean.json') as f:
+    with open('data\\json\\Falcon_v1.0_Easy_sm_clean.json') as f:
         graph_json_data = json.load(f)
     data = initialize(graph_json_data)
     graph = data["graph"]
+
+    path = list(map(lambda x:x.id, nx.dijkstra_path(graph, graph["vy10"], graph["vy7"])))
+    print(path)
 
     model = AgglomerativeClustering(distance_threshold=60, n_clusters=None, linkage="complete", affinity='precomputed')
     model = model.fit(data["distance_matrix"])
@@ -320,6 +323,7 @@ if __name__ == "__main__":
         if len(gvl) > 0:
             sep_cluster_green.append(gvl)
 
+    # clusters_sep_color = [["ew"]] + sep_cluster_yellow
     clusters_sep_color = [["ew"]] + sep_cluster_yellow + sep_cluster_green
 
     print(clusters_sep_color)
@@ -333,9 +337,11 @@ if __name__ == "__main__":
             inner_distance.append(0)
         else:
             distance = 0
+            triage_time = 0
             for n in range(len(c)-1):
                 distance += nx.dijkstra_path_length(graph, graph[c[n]], graph[c[n+1]])
-            inner_distance.append(distance)
+                triage_time += 15*5.6 if graph[c[n+1]].victim_type == VictimType.Yellow else 7.5*5.6
+            inner_distance.append(distance + triage_time)
 
     print(representative_nodes)
     print(inner_distance)
@@ -356,5 +362,12 @@ if __name__ == "__main__":
 
     solution = mip_solve(data_cluster_version)
     print(solution)
-
-
+    node_path = ["ew"]
+    full_path = []
+    for c in solution:
+        node_path += clusters_sep_color[c]
+    print(node_path)
+    for i in range(len(node_path)-1):
+        full_path += list(map(lambda x:x.id, nx.dijkstra_path(graph, graph[node_path[i]], graph[node_path[i+1]])))
+    print(full_path)
+    visualizer.animate_graph_training_json(full_path, graph_json_data, with_save="MIP_cluster_discounted_easy")
