@@ -3,6 +3,7 @@ from ortools.linear_solver import pywraplp
 import networkx as nx
 import numpy as np
 import matplotlib.pyplot as plt
+from sklearn.cluster import AgglomerativeClustering
 
 import json
 from random import shuffle
@@ -13,13 +14,34 @@ from graph.Nodes import VictimType
 
 import time
 
-def get_distance_matrix(graph, node_list):
+def get_distance_matrix_original(graph, node_list):
+    distance_matrix = np.zeros((len(node_list), len(node_list)))
+    for n1 in range(len(node_list)):
+        for n2 in range(n1+1, len(node_list)):
+            length = nx.dijkstra_path_length(graph, node_list[n1], node_list[n2])
+            distance_matrix[n1][n2] = length
+    distance_matrix = distance_matrix + distance_matrix.transpose()
+    distance_matrix[:,0] = 0
+    return distance_matrix.tolist()
+
+def get_distance_matrix_triage(graph, node_list):
     distance_matrix = np.zeros((len(node_list), len(node_list)))
     for n1 in range(len(node_list)):
         for n2 in range(n1+1, len(node_list)):
             length = nx.dijkstra_path_length(graph, node_list[n1], node_list[n2])
             triage_time = 15*5.6 if node_list[n2].victim_type == VictimType.Yellow else 7.5*5.6
             distance_matrix[n1][n2] = length + triage_time
+    distance_matrix = distance_matrix + distance_matrix.transpose()
+    distance_matrix[:,0] = 0
+    return distance_matrix.tolist()
+
+def get_distance_matrix_triage_innerdistance(graph, node_list, innerdistance):
+    distance_matrix = np.zeros((len(node_list), len(node_list)))
+    for n1 in range(len(node_list)):
+        for n2 in range(n1+1, len(node_list)):
+            length = nx.dijkstra_path_length(graph, graph[node_list[n1]], graph[node_list[n2]])
+            triage_time = 15*5.6 if graph[node_list[n2]].victim_type == VictimType.Yellow else 7.5*5.6
+            distance_matrix[n1][n2] = length + triage_time + innerdistance[n2]
     distance_matrix = distance_matrix + distance_matrix.transpose()
     distance_matrix[:,0] = 0
     return distance_matrix.tolist()
@@ -46,15 +68,16 @@ def initialize(graph_json_data):
     start = "ew"
     victim_list = graph.victim_list.copy()
     yellow_victims, green_victims = sep_yellow_green_victim_list(victim_list)
-    # node_list = [graph[start]] + yellow_victims + green_victims
-    victim_list = yellow_victims + green_victims
-    distance_matrix = get_distance_matrix(graph, victim_list)
+    node_list = [graph[start]] + yellow_victims + green_victims
+    # victim_list = yellow_victims + green_victims
+    distance_matrix = get_distance_matrix_original(graph, node_list)
     data = {
-        "node_list": victim_list,
+        "graph": graph,
+        "node_list": node_list,
         "distance_matrix": distance_matrix,
         "num_yellow": len(yellow_victims),
         "num_green": len(green_victims),
-        "num_all_nodes": len(victim_list)
+        "num_all_nodes": len(node_list)
     }
     return data
 
@@ -85,30 +108,6 @@ def toy_example_2():
         [0, 4, 1, 6, 5, 4, 0, 7, 4],
         [0, 3, 3, 2, 2, 1, 7, 0, 3],
         [0, 5, 6, 7, 9, 2, 4, 3, 0]
-    ]
-    data = {
-        "distance_matrix": distance_matrix,
-        "num_yellow": 3,
-        "num_green": 5,
-        "num_all_nodes": 9
-    }
-    return data
-
-def toy_example_3():
-    distance_matrix = [
-        [0, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-        [0, 0, 1, 4, 2, 3, 4, 3, 5],
-        [0, 1, 0, 1, 2, 5, 1, 3, 6],
-        [0, 4, 1, 0, 1, 2, 6, 2, 7],
-        [0, 2, 2, 1, 0, 3, 5, 2, 9],
-        [0, 3, 5, 2, 3, 0, 4, 1, 2],
-        [0, 4, 1, 6, 5, 4, 0, 7, 4],
-        [0, 3, 3, 2, 2, 1, 7, 0, 3],
-        [0, 5, 6, 7, 9, 2, 4, 3, 0],
-        [],
-        [],
-        [],
-        [],
     ]
     data = {
         "distance_matrix": distance_matrix,
@@ -218,7 +217,7 @@ def mip_solve(data):
     #         constraint_expr.append(Y[f"{s}_{i}"])
     #     V[f"{i}"] = sum(constraint_expr)
 
-    for i in range(1 + data["num_yellow"]):
+    for i in range(1, 1 + data["num_yellow"]):
         solver.Add(T[f"{i}"] - M*(1 - V[f"{i}"]) <= Threshold_yellow)
 
     for i in range(1 + data["num_yellow"], data["num_all_nodes"]):
@@ -282,34 +281,80 @@ def mip_solve(data):
     else:
         print('The problem does not have an optimal solution.')
 
+    solution = []
+    for s in range(n-1):
+        for i in range(n):
+            if int(Y[f"{s}_{i}"].solution_value()) == 1:
+                solution.append(i)
+                break
+    return solution
+
 if __name__ == "__main__":
     with open('data\\json\\Falcon_v1.0_Medium_sm_clean.json') as f:
         graph_json_data = json.load(f)
-    # data = toy_example_1()
-    # mip_solve(data)
+    data = initialize(graph_json_data)
+    graph = data["graph"]
 
-    #
-    graph = MapParser.parse_json_map_data_new_format(graph_json_data)
-    start = "ew"
-    victim_list_copy = graph.victim_list.copy()
+    model = AgglomerativeClustering(distance_threshold=60, n_clusters=None, linkage="complete", affinity='precomputed')
+    model = model.fit(data["distance_matrix"])
 
-    for i in range(1, 35):
+    print(model.labels_)
 
-        victim_list = victim_list_copy[:i]
-        yellow_victims, green_victims = sep_yellow_green_victim_list(victim_list)
-        node_list = [graph[start]] + yellow_victims + green_victims
-        # victim_list = yellow_victims + green_victims
-        distance_matrix = get_distance_matrix(graph, node_list)
-        # distance_matrix = scale_down_matrix(distance_matrix, i+1)
-        # print(distance_matrix)
-        data = {
-            "node_list": victim_list,
-            "distance_matrix": distance_matrix,
-            "num_yellow": len(yellow_victims),
-            "num_green": len(green_victims),
-            "num_all_nodes": len(node_list)
-        }
+    clusters = [[] for i in range(max(model.labels_)+1)]
+    for idx, n in enumerate(data["node_list"]):
+        clusters[model.labels_[idx]].append(n.id)
 
-        mip_solve(data)
+    print(clusters)
+    sep_cluster_yellow = []
+    sep_cluster_green = []
+    for l in clusters:
+        gvl = []
+        yvl = []
+        for v in l:
+            if 'vg' in v:
+                gvl.append(v)
+            if 'vy' in v:
+                yvl.append(v)
+        if len(yvl) > 0:
+            sep_cluster_yellow.append(yvl)
+        if len(gvl) > 0:
+            sep_cluster_green.append(gvl)
+
+    clusters_sep_color = [["ew"]] + sep_cluster_yellow + sep_cluster_green
+
+    print(clusters_sep_color)
+
+    representative_nodes = []
+    inner_distance = []
+
+    for c in clusters_sep_color:
+        representative_nodes.append(c[0])
+        if len(c) == 0:
+            inner_distance.append(0)
+        else:
+            distance = 0
+            for n in range(len(c)-1):
+                distance += nx.dijkstra_path_length(graph, graph[c[n]], graph[c[n+1]])
+            inner_distance.append(distance)
+
+    print(representative_nodes)
+    print(inner_distance)
+
+    distance_matrix_triage_inner = get_distance_matrix_triage_innerdistance(graph, representative_nodes, inner_distance)
+
+    data_cluster_version = {
+        "distance_matrix": distance_matrix_triage_inner,
+        "num_yellow": len(sep_cluster_yellow),
+        "num_green": len(sep_cluster_green),
+        "num_all_nodes": len(clusters_sep_color)
+    }
+    # for i in distance_matrix_triage_inner:
+    #     for j in i:
+    #         print(f"{j:.3f}", end=" ")
+    #     print()
+
+
+    solution = mip_solve(data_cluster_version)
+    print(solution)
 
 
